@@ -7,6 +7,7 @@ public enum AnalysisType {
 
     NONE,
     SPECIES_COMPARISON,
+    DATASET_COMPARISON,
     OVERREPRESENTATION,
     EXPRESSION;
 
