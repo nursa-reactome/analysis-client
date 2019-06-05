@@ -5,6 +5,7 @@ import com.google.gwt.json.client.JSONArray;
 import com.google.gwt.json.client.JSONObject;
 import com.google.gwt.json.client.JSONParser;
 import org.reactome.web.analysis.client.exceptions.AnalysisModelException;
+import org.reactome.web.analysis.client.filter.ResultFilter;
 import org.reactome.web.analysis.client.model.*;
 import org.reactome.web.analysis.client.model.factory.AnalysisModelFactory;
 import org.reactome.web.pwp.model.client.classes.Pathway;
@@ -15,7 +16,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * @author Antonio Fabregat <fabregat@ebi.ac.uk>
+ * @author Antonio Fabregat (fabregat@ebi.ac.uk)
  */
 public abstract class AnalysisClient {
 
@@ -24,15 +25,15 @@ public abstract class AnalysisClient {
 
     private static final Set<String> validTokens = new HashSet<>();
 
-    public static Request analyseData(String data, boolean projection, boolean interactors, int pageSize, int page, final AnalysisHandler.Result handler) {
-        String url = SERVER + ANALYSIS + "/identifiers/" + (projection ? "projection" : "") + "?interactors=" + interactors + "&pageSize=" + pageSize + "&page=" + page;
+    public static Request analyseData(String data, boolean projection, boolean interactors, ResultFilter filter, int pageSize, int page, final AnalysisHandler.Result handler) {
+        String url = SERVER + ANALYSIS + "/identifiers/" + (projection ? "projection" : "") + "?" + filter +"&interactors=" + interactors + "&pageSize=" + pageSize + "&page=" + page;
         RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.POST, url);
         requestBuilder.setHeader("Content-Type", "text/plain");
         return analyse(requestBuilder, data, handler);
     }
 
-    public static Request analyseURL(String targetURL, boolean projection, boolean interactors, int pageSize, int page, final AnalysisHandler.Result handler) {
-        String url = SERVER + ANALYSIS + "/identifiers/url/" + (projection ? "projection" : "") + "?interactors=" + interactors + "&pageSize=" + pageSize + "&page=" + page;
+    public static Request analyseURL(String targetURL, boolean projection, boolean interactors, ResultFilter filter, int pageSize, int page, final AnalysisHandler.Result handler) {
+        String url = SERVER + ANALYSIS + "/identifiers/url/" + (projection ? "projection" : "") + "?" + filter + "&interactors=" + interactors + "&pageSize=" + pageSize + "&page=" + page;
         RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.POST, url);
         requestBuilder.setHeader("Content-Type", "text/plain");
         return analyse(requestBuilder, targetURL, handler);
@@ -129,8 +130,11 @@ public abstract class AnalysisClient {
         return null;
     }
 
-    public static Request getResult(String token, String resource, int pageSize, int page, final AnalysisHandler.Result handler) {
-        String url = SERVER + ANALYSIS + "/token/" + token + "?resource=" + resource + "&pageSize=" + pageSize + "&page=" + page;
+    public static Request getResult(String token, ResultFilter filter, int pageSize, int page, String sortBy, String order, final AnalysisHandler.Result handler) {
+        String url = SERVER + ANALYSIS + "/token/" + token + "?" + filter +
+                "&pageSize=" + pageSize + "&page=" + page +
+                (sortBy == null || sortBy.isEmpty() ? "" : "&sortBy=" + sortBy) +
+                (order == null || order.isEmpty() ? "" : "&order=" + order);
         RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.GET, url);
         try {
             final long start = System.currentTimeMillis();
@@ -412,7 +416,7 @@ public abstract class AnalysisClient {
     }
 
 
-    public static Request getPathwaySummaries(String token, String resource, List<String> pathways, final AnalysisHandler.Summaries handler) {
+    public static Request getPathwaySummaries(String token, ResultFilter filter, List<String> pathways, final AnalysisHandler.Summaries handler) {
         if (pathways == null || pathways.isEmpty()) return null;
         StringBuilder postData = new StringBuilder();
         for (String pathway : pathways) {
@@ -420,7 +424,7 @@ public abstract class AnalysisClient {
         }
         if (postData.length() > 0) postData.deleteCharAt(postData.length() - 1);
 
-        String url = SERVER + ANALYSIS + "/token/" + token + "/filter/pathways?resource=" + resource;
+        String url = SERVER + ANALYSIS +  "/token/" + token + "/filter/pathways?" + filter;
         RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.POST, url);
         try {
             final long start = System.currentTimeMillis();
@@ -448,6 +452,50 @@ public abstract class AnalysisClient {
                             try {
                                 AnalysisError analysisError = AnalysisModelFactory.getModelObject(AnalysisError.class, response.getText());
                                 handler.onPathwaySummariesError(analysisError);
+                            } catch (AnalysisModelException e) {
+                                handler.onAnalysisServerException(e.getMessage());
+                            }
+                    }
+                }
+
+                @Override
+                public void onError(Request request, Throwable exception) {
+                    handler.onAnalysisServerException(exception.getMessage());
+                }
+            });
+        } catch (RequestException ex) {
+            handler.onAnalysisServerException(ex.getMessage());
+        }
+        return null;
+    }
+
+    public static Request getPathwaysBinnedBySize(String token, Integer binSize, ResultFilter filter, final AnalysisHandler.PathwaysBinned handler) {
+        String url = SERVER + ANALYSIS + "/token/" + token + "/pathways/binned/?" + "binSize=" + binSize + "&" + filter;
+        RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.GET, url);
+        requestBuilder.setHeader("Accept", "application/json");
+        try {
+            return requestBuilder.sendRequest(null, new RequestCallback() {
+                @Override
+                public void onResponseReceived(Request request, Response response) {
+                    switch (response.getStatusCode()) {
+                        case Response.SC_OK:
+                            List<Bin> pathwaysBinned = new LinkedList<>();
+                            try {
+                                JSONArray aux = JSONParser.parseStrict(response.getText()).isArray();
+                                for (int i = 0; i < aux.size(); i++) {
+                                    JSONObject obj = aux.get(i).isObject();
+                                    pathwaysBinned.add(AnalysisModelFactory.getModelObject(Bin.class, obj.toString()));
+                                }
+                            } catch (AnalysisModelException e) {
+                                handler.onAnalysisServerException(e.getMessage());
+                                return;
+                            }
+                            handler.onPathwaysBinnedLoaded(pathwaysBinned);
+                            break;
+                        default:
+                            try {
+                                AnalysisError analysisError = AnalysisModelFactory.getModelObject(AnalysisError.class, response.getText());
+                                handler.onPathwaysBinnedError(analysisError);
                             } catch (AnalysisModelException e) {
                                 handler.onAnalysisServerException(e.getMessage());
                             }
@@ -505,7 +553,7 @@ public abstract class AnalysisClient {
         return null;
     }
 
-    public static Request getHitReactions(String token, String resource, Set<Pathway> pathways, final AnalysisHandler.Reactions handler) {
+    public static Request getHitReactions(String token, ResultFilter filter, Set<Pathway> pathways, final AnalysisHandler.Reactions handler) {
         if (pathways == null || pathways.isEmpty()) return null;
         StringBuilder postData = new StringBuilder();
         for (Pathway pathway : pathways) {
@@ -513,7 +561,7 @@ public abstract class AnalysisClient {
         }
         if (postData.length() > 0) postData.delete(postData.length() - 1, postData.length());
 
-        String url = SERVER + ANALYSIS + "/token/" + token + "/reactions/pathways?resource=" + resource;
+        String url = SERVER + ANALYSIS + "/token/" + token + "/reactions/pathways?" + filter;
         RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.POST, url);
         try {
             return requestBuilder.sendRequest(postData.toString(), new RequestCallback() {
@@ -554,8 +602,12 @@ public abstract class AnalysisClient {
         return null;
     }
 
-    public static void findPathwayPage(Long pathway, String token, String resource, final AnalysisHandler.Page handler) {
-        String url = SERVER + ANALYSIS + "/token/" + token + "/page/" + pathway + "?resource=" + resource;
+    public static void findPathwayPage(Long pathway, String token, ResultFilter filter, int pageSize, String sortBy, String order, final AnalysisHandler.Page handler) {
+        String url = SERVER + ANALYSIS + "/token/" + token + "/page/" + pathway + "?" +
+                filter +
+                "&pageSize=" + pageSize +
+                (sortBy == null || sortBy.isEmpty() ? "" : "&sortBy=" + sortBy) +
+                (order == null || order.isEmpty() ? "" : "&order=" + order);
         RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.GET, url);
         requestBuilder.setHeader("Accept", "application/json");
         try {
@@ -625,7 +677,6 @@ public abstract class AnalysisClient {
         }
         return null;
     }
-
 }
 
 
