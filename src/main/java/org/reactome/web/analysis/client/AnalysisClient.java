@@ -4,6 +4,8 @@ import com.google.gwt.http.client.*;
 import com.google.gwt.json.client.JSONArray;
 import com.google.gwt.json.client.JSONObject;
 import com.google.gwt.json.client.JSONParser;
+
+import org.reactome.web.analysis.client.AnalysisHandler.Result;
 import org.reactome.web.analysis.client.exceptions.AnalysisModelException;
 import org.reactome.web.analysis.client.filter.ResultFilter;
 import org.reactome.web.analysis.client.model.*;
@@ -129,6 +131,205 @@ public abstract class AnalysisClient {
         }
         return null;
     }
+
+    // BEGIN KLUDGE
+    // NOTE: the methods below down to the END KLUDGE comment were
+    // grabbed from GitHub master to resolve Reactome project source
+    // inconsistencies. The methods should be deleted at the earliest
+    // opportunity should the Reactome GitHub projects should ever be
+    // in a consistent release state.
+
+    public static Request getResult(String token, String resource, int pageSize, int page, final AnalysisHandler.Result handler) {
+        String url = SERVER + ANALYSIS + "/token/" + token + "?resource=" + resource + "&pageSize=" + pageSize + "&page=" + page;
+        RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.GET, url);
+        try {
+            final long start = System.currentTimeMillis();
+            return requestBuilder.sendRequest(null, new RequestCallback() {
+                @Override
+                public void onResponseReceived(Request request, Response response) {
+                    long time;
+                    switch (response.getStatusCode()) {
+                        case Response.SC_OK:
+                            try {
+                                AnalysisResult result = AnalysisModelFactory.getModelObject(AnalysisResult.class, response.getText());
+                                time = System.currentTimeMillis() - start;
+                                handler.onAnalysisResult(result, time);
+                            } catch (AnalysisModelException e) {
+                                handler.onAnalysisServerException(e.getMessage());
+                            }
+                            break;
+                        default:
+                            try {
+                                AnalysisError analysisError = AnalysisModelFactory.getModelObject(AnalysisError.class, response.getText());
+                                handler.onAnalysisError(analysisError);
+                            } catch (AnalysisModelException e) {
+                                handler.onAnalysisServerException(e.getMessage());
+                            }
+                    }
+                }
+
+                @Override
+                public void onError(Request request, Throwable throwable) {
+                    handler.onAnalysisServerException(throwable.getMessage());
+                }
+            });
+        } catch (RequestException e) {
+            handler.onAnalysisServerException(e.getMessage());
+        }
+        return null;
+    }
+    
+    public static void findPathwayPage(Long pathway, String token, String resource, final AnalysisHandler.Page handler) {
+        String url = SERVER + ANALYSIS + "/token/" + token + "/page/" + pathway + "?resource=" + resource;
+        RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.GET, url);
+        requestBuilder.setHeader("Accept", "application/json");
+        try {
+            requestBuilder.sendRequest(null, new RequestCallback() {
+                @Override
+                public void onResponseReceived(Request request, Response response) {
+                    switch (response.getStatusCode()) {
+                        case Response.SC_OK:
+                            int page = Integer.valueOf(response.getText());
+                            handler.onPageFound(page);
+                            break;
+                        default:
+                            try {
+                                AnalysisError analysisError = AnalysisModelFactory.getModelObject(AnalysisError.class, response.getText());
+                                handler.onPageError(analysisError);
+                            } catch (AnalysisModelException e) {
+                                handler.onAnalysisServerException(e.getMessage());
+                            }
+                    }
+
+                }
+
+                @Override
+                public void onError(Request request, Throwable exception) {
+                    handler.onAnalysisServerException(exception.getMessage());
+                }
+            });
+        } catch (RequestException ex) {
+            handler.onAnalysisServerException(ex.getMessage());
+        }
+    }
+
+    public static Request analyseData(String data, boolean projection, boolean interactors, int pageSize, int page, final AnalysisHandler.Result handler) {
+        String url = SERVER + ANALYSIS + "/identifiers/" + (projection ? "projection" : "") + "?interactors=" + interactors + "&pageSize=" + pageSize + "&page=" + page;
+        RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.POST, url);
+        requestBuilder.setHeader("Content-Type", "text/plain");
+        return analyse(requestBuilder, data, handler);
+    }
+
+    public static Request analyseURL(String targetURL, boolean projection, boolean interactors, int pageSize, int page, final AnalysisHandler.Result handler) {
+        String url = SERVER + ANALYSIS + "/identifiers/url/" + (projection ? "projection" : "") + "?interactors=" + interactors + "&pageSize=" + pageSize + "&page=" + page;
+        RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.POST, url);
+        requestBuilder.setHeader("Content-Type", "text/plain");
+        return analyse(requestBuilder, targetURL, handler);
+    }
+
+    public static Request getPathwaySummaries(String token, String resource, List<String> pathways, final AnalysisHandler.Summaries handler) {
+        if (pathways == null || pathways.isEmpty()) return null;
+        StringBuilder postData = new StringBuilder();
+        for (String pathway : pathways) {
+            postData.append(pathway).append(",");
+        }
+        if (postData.length() > 0) postData.deleteCharAt(postData.length() - 1);
+
+        String url = SERVER + ANALYSIS + "/token/" + token + "/filter/pathways?resource=" + resource;
+        RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.POST, url);
+        try {
+            final long start = System.currentTimeMillis();
+            return requestBuilder.sendRequest(postData.toString(), new RequestCallback() {
+                @Override
+                public void onResponseReceived(Request request, Response response) {
+                    long time;
+                    switch (response.getStatusCode()) {
+                        case Response.SC_OK:
+                            List<PathwaySummary> pathwaySummaries;
+                            try {
+                                pathwaySummaries = AnalysisModelFactory.getPathwaySummaryList(response.getText());
+                                time = System.currentTimeMillis() - start;
+                            } catch (AnalysisModelException e) {
+                                handler.onAnalysisServerException(e.getMessage());
+                                return;
+                            }
+                            handler.onPathwaySummariesLoaded(pathwaySummaries, time);
+                            break;
+                        case Response.SC_NOT_FOUND:
+                            time = System.currentTimeMillis() - start;
+                            handler.onPathwaySummariesNotFound(time);
+                            break;
+                        default:
+                            try {
+                                AnalysisError analysisError = AnalysisModelFactory.getModelObject(AnalysisError.class, response.getText());
+                                handler.onPathwaySummariesError(analysisError);
+                            } catch (AnalysisModelException e) {
+                                handler.onAnalysisServerException(e.getMessage());
+                            }
+                    }
+                }
+
+                @Override
+                public void onError(Request request, Throwable exception) {
+                    handler.onAnalysisServerException(exception.getMessage());
+                }
+            });
+        } catch (RequestException ex) {
+            handler.onAnalysisServerException(ex.getMessage());
+        }
+        return null;
+    }
+
+    public static Request getHitReactions(String token, String resource, Set<Pathway> pathways, final AnalysisHandler.Reactions handler) {
+        if (pathways == null || pathways.isEmpty()) return null;
+        StringBuilder postData = new StringBuilder();
+        for (Pathway pathway : pathways) {
+            postData.append(pathway.getDbId()).append(",");
+        }
+        if (postData.length() > 0) postData.delete(postData.length() - 1, postData.length());
+
+        String url = SERVER + ANALYSIS + "/token/" + token + "/reactions/pathways?resource=" + resource;
+        RequestBuilder requestBuilder = new RequestBuilder(RequestBuilder.POST, url);
+        try {
+            return requestBuilder.sendRequest(postData.toString(), new RequestCallback() {
+                @Override
+                public void onResponseReceived(Request request, Response response) {
+                    switch (response.getStatusCode()) {
+                        case Response.SC_OK:
+                            try {
+                                JSONArray res = JSONParser.parseStrict(response.getText()).isArray();
+                                Set<Long> hitReactions = new HashSet<>();
+                                for (int i = 0; i < res.size(); i++) {
+                                    hitReactions.add(Long.valueOf(res.get(i).toString()));
+                                }
+                                handler.onReactionsAnalysisDataRetrieved(hitReactions);
+                            } catch (Exception ex) {
+                                handler.onAnalysisServerException(ex.getMessage());
+                            }
+                            break;
+                        default:
+                            try {
+                                AnalysisError analysisError = AnalysisModelFactory.getModelObject(AnalysisError.class, response.getText());
+                                handler.onReactionsAnalysisError(analysisError);
+                            } catch (AnalysisModelException e) {
+                                handler.onAnalysisServerException(e.getMessage());
+                            }
+                    }
+                }
+
+                @Override
+                public void onError(Request request, Throwable exception) {
+                    handler.onAnalysisServerException(exception.getMessage());
+                }
+            });
+
+        } catch (RequestException ex) {
+            handler.onAnalysisServerException(ex.getMessage());
+        }
+        return null;
+    }
+    
+    // END KLUDGE
 
     public static Request getResult(String token, ResultFilter filter, int pageSize, int page, String sortBy, String order, final AnalysisHandler.Result handler) {
         String url = SERVER + ANALYSIS + "/token/" + token + "?" + filter +
